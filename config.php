@@ -1,9 +1,9 @@
 <?php
 // Настройки базы данных для остатков
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'waterglow_ru');
-define('DB_USER', 'waterglow_ru');
-define('DB_PASSWORD', '7wZyWVyxcyLDfTJV');
+define('DB_NAME', '');
+define('DB_USER', '');
+define('DB_PASSWORD', '');
 
 // Путь к файлу лога
 define('LOG_FILE', __DIR__ . '/app.log');
