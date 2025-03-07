@@ -52,27 +52,27 @@ function getFeedSettings(): array
 {
     try {
         $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASSWORD);
-        $stmt = $pdo->prepare("SELECT feed_id, feed_name, include_no_image, include_out_of_stock, min_price, selected_brands, title_contains FROM feed_settings");
+        $stmt = $pdo->prepare("SELECT feed_id, feed_name, include_no_image, include_out_of_stock, min_price, selected_brands, title_contains, exclude_words FROM feed_settings");
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (PDOException $e) {
-        handlePDOException($e, "SELECT feed_id, feed_name, include_no_image, include_out_of_stock, min_price, selected_brands, title_contains FROM feed_settings");
+        handlePDOException($e, "SELECT feed_id, feed_name, include_no_image, include_out_of_stock, min_price, selected_brands, title_contains, exclude_words FROM feed_settings");
         return [];
     }
 }
 
 // Функция для сохранения настроек
-function saveSettings(int $feed_id, string $feed_name, bool $includeNoImage, bool $includeOutOfStock, float $minPrice, array $selectedBrands, string $titleContains): void
+function saveSettings(int $feed_id, string $feed_name, bool $includeNoImage, bool $includeOutOfStock, float $minPrice, array $selectedBrands, string $titleContains, string $excludeWords): void
 {
     try {
         $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASSWORD);
         // Преобразуем массив ID брендов в строку, разделенную запятыми
         $brandsString = implode(',', array_map('intval', $selectedBrands));
-        $sql = "UPDATE feed_settings SET feed_name = ?, include_no_image = ?, include_out_of_stock = ?, min_price = ?, selected_brands = ?, title_contains = ? WHERE feed_id = ?";
+        $sql = "UPDATE feed_settings SET feed_name = ?, include_no_image = ?, include_out_of_stock = ?, min_price = ?, selected_brands = ?, title_contains = ?, exclude_words = ? WHERE feed_id = ?";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $brandsString, $titleContains, $feed_id]);
+        $stmt->execute([$feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $brandsString, $titleContains, $excludeWords, $feed_id]);
     } catch (PDOException $e) {
-        handlePDOException($e, "saveSettings", [$feed_id, $feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $selectedBrands, $titleContains]);
+        handlePDOException($e, "saveSettings", [$feed_id, $feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $selectedBrands, $titleContains, $excludeWords]);
     }
 }
 
@@ -92,8 +92,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $selectedBrands = $_POST['brands_' . $setting['feed_id']] ?? [];
         // Получаем значение "Название содержит"
         $titleContains = trim($_POST['title_contains_' . $setting['feed_id']] ?? '');
+        // Получаем значение "Слова исключения"
+        $excludeWords = trim($_POST['exclude_words_' . $setting['feed_id']] ?? '');
 
-        saveSettings($feed_id, $feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $selectedBrands, $titleContains);
+        saveSettings($feed_id, $feed_name, $includeNoImage, $includeOutOfStock, $minPrice, $selectedBrands, $titleContains, $excludeWords);
     }
 
     // После сохранения настроек, перенаправляем на ту же страницу для обновления данных
@@ -164,6 +166,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <!--  Фильтрация по названию  -->
                 <label for="title_contains_<?php echo $setting['feed_id']; ?>">Название содержит:</label>
                 <input type="text" name="title_contains_<?php echo $setting['feed_id']; ?>" value="<?php echo htmlspecialchars((string) $setting['title_contains']); ?>" style="width:200px"><br><br>
+
+                 <!--  Слова исключения  -->
+                <label for="exclude_words_<?php echo $setting['feed_id']; ?>">Слова исключения (через запятую):</label>
+                <input type="text" name="exclude_words_<?php echo $setting['feed_id']; ?>" value="<?php echo htmlspecialchars((string) $setting['exclude_words']); ?>" style="width:200px"><br><br>
+
 
                 <a href="avito.php?feed_id=<?php echo htmlspecialchars($setting['feed_id']); ?>" target="_blank">Экспортировать в XML</a>
             </fieldset>
