@@ -1,5 +1,5 @@
-<?php ob_start(); ?>
 <?php
+
 // avito.php
 require_once 'config.php';
 
@@ -11,25 +11,15 @@ function logToFile(string $message): void
     error_log($logMessage, 3, LOG_FILE);
 }
 
-// Настройки для Avito
-$formatVersion = "3";
-$target = "Avito.ru";
-$fixedAddress = "город Москва, Ленинградское шоссе, 16А, стр. 4";
-$fixedCategory = "Мебель и интерьер";
-$fixedLedLamp = "Да";
+// Настройки для Avito (общие)
 $defaultCondition = "Новое";
 $imagePrefix = "https://waterglow.ru/files/originals/products/";
 $defaultAdType = "Товар приобретен на продажу";
 $contactPhone = "+7(980)480-15-28";
 $availability = "в наличии";
-$fixedGoodsSubType = "Потолочное и настенное";
-$fixedGoodsType = "Освещение";
-$lightingType = "Люстры";
-$chandelierType = "Люстра";
-$chandelierMountingType = "Подвесное";
-$delivery = "Свой курьер";
-$internetCalls = "Да";
-$contactMethod = "По телефону и в сообщениях";
+$fixedAddress = "город Москва, Ленинградское шоссе, 16А, стр. 4";
+$material = "Металл";
+const MAX_IMAGES = 10; // Максимальное количество изображений
 
 // Получаем feed_id из GET-параметра
 $feed_id = isset($_GET['feed_id']) ? intval($_GET['feed_id']) : 0;
@@ -42,8 +32,8 @@ function getFeedSettings(int $feed_id): array
 {
     try {
         $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASSWORD);
-        $stmt = $pdo->prepare("SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains FROM feed_settings WHERE feed_id = ?");
-        logToFile("SQL (getFeedSettings): SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains FROM feed_settings WHERE feed_id = ?");
+        $stmt = $pdo->prepare("SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains, exclude_words FROM feed_settings WHERE feed_id = ?");
+        logToFile("SQL (getFeedSettings): SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains, exclude_words FROM feed_settings WHERE feed_id = ?");
         logToFile("Params (getFeedSettings): " . print_r([$feed_id], true));
         $stmt->execute([$feed_id]);
         $settings = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -77,33 +67,51 @@ $includeNoImage = (bool) ($feedSettings['include_no_image'] ?? false);
 $includeOutOfStock = (bool) ($feedSettings['include_out_of_stock'] ?? false);
 $minPrice = (float) ($feedSettings['min_price'] ?? 0.00);
 $titleContains = $feedSettings['title_contains'] ?? '';
+$excludeWords = $feedSettings['exclude_words'] ?? '';
+
 
 // Преобразуем строку выбранных брендов в массив
 $selectedBrands = ($selectedBrandsString === 'all') ? 'all' : explode(',', $selectedBrandsString);
 
-
 // Получение объектов товаров
-function getProductsFromDatabase(array $selectedBrands = [], bool $includeNoImage = false, bool $includeOutOfStock = false, float $minPrice = 0, string $titleContains = ''): array
+function getProductsFromDatabase(array $selectedBrands = [], bool $includeNoImage = false, bool $includeOutOfStock = false, float $minPrice = 0, string $titleContains = '', string $excludeWords = ''): array
 {
     $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASSWORD);
 
     $sql = "
-        SELECT p.id, p.name, p.description, p.main_image_id, p.brand_id
+        SELECT
+            p.id,
+            p.name,
+            p.description,
+            p.main_image_id,
+            p.brand_id,
+            v.id_aprel,
+            v.`category_av`,
+            v.goodssubtype,
+            v.goodstype,
+            v.`BathroomAccessoriestype`,
+            v.`producttype`,
+			v.`BathMaterial`,
+            v.`BathShape`,
+            v.`BathJacuzzi`,
+            v.`BathWidth`,
+            v.`chandeliermountingtype`,	
+            v.`chandeliertype`,				
+            v.`ligitingtype`,				
+			
+            v.`BathLength`
         FROM ok_products p
-        JOIN ok_variants v ON p.id = v.product_id  --  JOIN чтобы получить цену
+        JOIN ok_variants v ON p.id = v.product_id
     ";
 
     $params = [];
 
     // Условие для брендов
-    if (!empty($selectedBrands) && !in_array('all', $selectedBrands)) {
+    if (!empty($selectedBrands) && $selectedBrands !== 'all') {
         $sql .= " WHERE p.brand_id IN (" . implode(',', array_fill(0, count($selectedBrands), '?')) . ")";
         $params = $selectedBrands;
-    } else if ($selectedBrands !== 'all'){
-        $sql .= " WHERE 1=1"; //  Чтобы можно было добавлять условия AND
     } else {
-        //Если выбраны все бренды ничего не добавляем
-        $sql .= " WHERE 1=1";
+        $sql .= " WHERE 1=1"; //  Чтобы можно было добавлять условия AND
     }
 
     // Условие для минимальной цены
@@ -128,19 +136,39 @@ function getProductsFromDatabase(array $selectedBrands = [], bool $includeNoImag
         $params[] = '%' . $titleContains . '%';
     }
 
-    $sql .= " GROUP BY p.id"; //  Группируем, чтобы не было дубликатов из-за нескольких вариантов
-    $sql .= " LIMIT 10"; // Ограничение количества товаров (если нужно)
-
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
-    $products = $stmt->fetchAll(PDO::FETCH_CLASS, 'stdClass');
-
-    // Получаем характеристики для каждого товара
-    foreach ($products as $product) {
-        $product->features = getProductFeatures($pdo, $product->id);
+    // Условие для исключения товаров по словам
+    if (!empty($excludeWords)) {
+        $excludeWordsArray = array_map('trim', explode(',', $excludeWords));
+        $placeholders = implode(' AND p.name NOT LIKE ?', array_fill(0, count($excludeWordsArray), null));
+        $sql .= " AND p.name NOT LIKE ?" . $placeholders;
+        foreach ($excludeWordsArray as $word) {
+            $params[] = '%' . $word . '%';
+        }
     }
 
-    return $products;
+    $sql .= " GROUP BY p.id"; //  Группируем, чтобы не было дубликатов из-за нескольких вариантов
+    $sql .= " LIMIT 10000"; // Ограничение количества товаров (если нужно)
+
+    // Log SQL и параметры
+    logToFile("SQL (getProductsFromDatabase): " . $sql);
+    logToFile("Params (getProductsFromDatabase): " . print_r($params, true));
+
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $products = $stmt->fetchAll(PDO::FETCH_CLASS, 'stdClass');
+
+        // Получаем характеристики для каждого товара
+        foreach ($products as $product) {
+            $product->features = getProductFeatures($pdo, $product->id);
+        }
+
+        return $products;
+
+    } catch (PDOException $e) {
+        handlePDOException($e, $sql, $params);
+        return []; // Возвращаем пустой массив в случае ошибки
+    }
 }
 
 // Функция для получения характеристик товара
@@ -160,8 +188,6 @@ function getProductFeatures(PDO $pdo, int $product_id): array
 //Функция для получения цены
 function getPrice(int $product_id): string
 {
-    // Здесь нужно реализовать код для получения цены товара из вашей базы данных.
-    //  Должна вернуть цену товара.
     $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASSWORD);
 
     $stmt = $pdo->prepare("
@@ -170,8 +196,6 @@ function getPrice(int $product_id): string
         WHERE product_id = ?
         LIMIT 1
     ");
-    //logToFile("SQL (getPrice): " . $stmt->queryString);
-    //logToFile("Params (getPrice): " . print_r([$product_id], true));
     $stmt->execute([$product_id]);
     $price = $stmt->fetchColumn();
     return $price ?: "";
@@ -192,8 +216,6 @@ function getImageUrl(int $main_image_id): string
             FROM ok_images
             WHERE id = ?
         ");
-        //logToFile("SQL (getImageUrl): " . $stmt->queryString);
-        //logToFile("Params (getImageUrl): " . print_r([$main_image_id], true));
         $stmt->execute([$main_image_id]);
         $image = $stmt->fetch();
 
@@ -203,7 +225,6 @@ function getImageUrl(int $main_image_id): string
             return "";
         }
     } catch (PDOException $e) {
-        //logToFile("Ошибка при получении URL-адреса изображения: " . $e->getMessage());
         return "";
     }
 }
@@ -219,8 +240,6 @@ function getAdditionalImageUrls(int $product_id): array
             FROM ok_images
             WHERE product_id = ?
         ");
-      //logToFile("SQL (getAdditionalImageUrls): " . $stmt->queryString);
-      //logToFile("Params (getAdditionalImageUrls): " . print_r([$product_id], true));
         $stmt->execute([$product_id]);
         $images = $stmt->fetchAll();
 
@@ -234,7 +253,6 @@ function getAdditionalImageUrls(int $product_id): array
         return $image_urls;
 
     } catch (PDOException $e) {
-        //logToFile("Ошибка при получении URL-адресов дополнительных изображений: " . $e->getMessage());
         return [];
     }
 }
@@ -250,8 +268,6 @@ function getBrandName(int $product_id): string
             JOIN ok_brands b ON p.brand_id = b.id
             WHERE p.id = ?
         ");
-      //logToFile("SQL (getBrandName): " . $stmt->queryString);
-      //logToFile("Params (getBrandName): " . print_r([$product_id], true));
         $stmt->execute([$product_id]);
         $brand = $stmt->fetch();
 
@@ -261,34 +277,98 @@ function getBrandName(int $product_id): string
 
         return $brand['name'];
     } catch (PDOException $e) {
-        //logToFile("Ошибка при получении бренда: " . $e->getMessage());
         return "";
     }
 }
 
+// Функция для генерации XML-тега
+function generateXmlTag(string $tagName, string $value): string {
+    if (!empty($value)) {
+        return "    <" . htmlspecialchars($tagName) . ">" . htmlspecialchars($value) . "</" . htmlspecialchars($tagName) . ">" . PHP_EOL;
+    }
+    return "";
+}
+
 // Получаем объекты товаров
-$products = getProductsFromDatabase($selectedBrands, $includeNoImage, $includeOutOfStock, $minPrice, $titleContains);
+$products = getProductsFromDatabase($selectedBrands, $includeNoImage, $includeOutOfStock, $minPrice, $titleContains, $excludeWords);
 
 // Формируем имя файла
 $filename = !empty($feedName) ? $feedName . '.xml' : 'feed.xml';
 
-// Заголовки для XML-файла - перенесены в конец файла
-?>
-<?php
-$xml = ob_get_contents(); // Получаем содержимое буфера
-ob_end_clean(); //Очищаем буфер
-
+// Заголовки для XML-файла
 header('Content-Disposition: attachment; filename="' . $filename . '"');
 header('Content-type: text/xml');
 
 echo '<?xml version="1.0" encoding="UTF-8"?>' . PHP_EOL;
-echo "<Ads formatVersion=\"{$formatVersion}\" target=\"{$target}\">" . PHP_EOL;
+echo "<Ads formatVersion=\"3\" target=\"Avito.ru\">" . PHP_EOL;
 
 // Генерируем XML
 foreach ($products as $product) {
-    echo "  <Ad>" . PHP_EOL;
-    echo "    <Id>" . htmlspecialchars($product->id) . "</Id>" . PHP_EOL;
-    echo "    <Title>" . htmlspecialchars($product->name) . "</Title>" . PHP_EOL;
+    $xml = ""; // Инициализируем переменную для хранения XML-кода товара
+
+    // Получаем URL-адрес главной картинки
+    $main_image_url = getImageUrl($product->main_image_id);
+    if (empty($main_image_url)) {
+        // Пропускаем товар, если нет главной картинки и настройка includeNoImage отключена
+        continue;
+    }
+
+    // Общие значения по умолчанию
+    $formatVersion = "3";
+    $target = "Avito.ru";
+    $fixedAddress = "город Москва, Ленинградское шоссе, 16А, стр. 4";
+    $defaultCondition = "Новое";
+    $imagePrefix = "https://waterglow.ru/files/originals/products/";
+    $defaultAdType = "Товар приобретен на продажу";
+    $contactPhone = "+7(980)480-15-28";
+    $availability = "в наличии";
+
+    if ($product->id_aprel == 'san') {
+        $fixedCategory = isset($product->category_av) ? htmlspecialchars($product->category_av) : "Не указано";
+        $fixedGoodsSubType = isset($product->goodssubtype) ? htmlspecialchars($product->goodssubtype) : "Не указано";
+        $fixedGoodsType = isset($product->goodstype) ? htmlspecialchars($product->goodstype) : "Не указано";
+        $delivery = "Свой курьер";
+        $internetCalls = "Да";
+        $contactMethod = "По телефону и в сообщениях";
+        $producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";
+        $bathroombccessoriestype = isset($product->BathroomAccessoriestype) ? htmlspecialchars($product->BathroomAccessoriestype) : "";
+        $BathMaterial = isset($product->BathMaterial) ? htmlspecialchars($product->BathMaterial) : "";
+        $BathShape = isset($product->BathShape) ? htmlspecialchars($product->BathShape) : "";
+        $BathJacuzzi = isset($product->BathJacuzzi) ? htmlspecialchars($product->BathJacuzzi) : "";
+        $BathWidth = isset($product->BathWidth) ? htmlspecialchars($product->BathWidth) : "";
+        $BathLength = isset($product->BathLength) ? htmlspecialchars($product->BathLength) : "";
+		$producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";			
+
+		
+    } elseif ($product->id_aprel == 'svet') {
+        $fixedCategory = "Мебель и интерьер";
+        $fixedGoodsSubType = "Потолочное и настенное";
+        $fixedGoodsType = "Освещение";
+        $delivery = "Свой курьер";
+        $internetCalls = "Да";
+        $contactMethod = "По телефону и в сообщениях";
+        $numberoflamps = "1";
+		$ledlamp = "Да";
+		$category_av = isset($product->category_av) ? htmlspecialchars($product->category_av) : "";
+		$chandeliermountingtype = isset($product->chandeliermountingtype) ? htmlspecialchars($product->chandeliermountingtype) : "";
+		$chandeliertype = isset($product->chandeliertype) ? htmlspecialchars($product->chandeliertype) : "";
+		$ligitingtype = isset($product->ligitingtype) ? htmlspecialchars($product->ligitingtype) : "";		
+		$producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";		
+	
+    } else {
+        // Значения по умолчанию для других id_aprel
+        $fixedCategory = "Разное";
+        $fixedGoodsSubType = "Разное";
+        $fixedGoodsType = "Разное";
+        $delivery = "Разное";
+        $internetCalls = "Нет";
+        $contactMethod = "Разное";
+        $numberoflamps = "1";
+    }
+
+    $xml .= "  <Ad>" . PHP_EOL;
+    $xml .= "    <Id>" . htmlspecialchars($product->id) . "</Id>" . PHP_EOL;
+    $xml .= "    <Title>" . htmlspecialchars($product->name) . "</Title>" . PHP_EOL;
 
     // Формирование описания товара
     $description = ""; // Инициализируем пустую строку
@@ -312,61 +392,83 @@ foreach ($products as $product) {
 
     $description .= "</ul>"; // Закрытие списка характеристик
 
-    echo "    <Description><![CDATA[" . $description . "]]></Description>" . PHP_EOL;
+    $xml .= "    <Description><![CDATA[" . $description . "]]></Description>" . PHP_EOL;
 
-    // Получаем цену (замените на ваш код получения цены)
-    $price = getPrice($product->id); // Замените на ваш код получения цены
-    echo "    <Price>" . htmlspecialchars($price) . "</Price>" . PHP_EOL;
+    // Получаем цену
+    $price = getPrice($product->id);
+    $xml .= "    <Price>" . htmlspecialchars($price) . "</Price>" . PHP_EOL;
 
-    echo "    <Category>" . htmlspecialchars($fixedCategory) . "</Category>" . PHP_EOL;
+    $xml .= "    <Category>" . $fixedCategory . "</Category>" . PHP_EOL;
 
     // Упрощенная логика с изображениями
-    echo "    <Images>" . PHP_EOL;
+    $xml .= "    <Images>" . PHP_EOL;
     $addedImageUrls = []; // Массив для отслеживания добавленных URL-адресов изображений
-    // Получаем URL-адрес главной картинки (замените на ваш код)
-    $main_image_url = ($product->main_image_id !== null) ? getImageUrl($product->main_image_id) : "";
-    if (!empty($main_image_url) && !in_array($main_image_url, $addedImageUrls)) {
-        echo "      <Image url=\"" . htmlspecialchars(trim($main_image_url)) . "\"/>" . PHP_EOL;
+    $imageCount = 0;
+
+    if (!empty($main_image_url) && !in_array($main_image_url, $addedImageUrls) && $imageCount < MAX_IMAGES) {
+        $xml .= "      <Image url=\"" . htmlspecialchars(trim($main_image_url)) . "\"/>" . PHP_EOL;
         $addedImageUrls[] = $main_image_url; // Добавляем URL-адрес в массив
+        $imageCount++;
     }
 
-    // Получаем URL-адреса дополнительных изображений (замените на ваш код)
+    // Получаем URL-адреса дополнительных изображений
     $additional_image_urls = getAdditionalImageUrls($product->id);
     foreach ($additional_image_urls as $image_url) {
-        if (!empty($image_url) && !in_array($image_url, $addedImageUrls)) {
-            echo "      <Image url=\"" . htmlspecialchars(trim($image_url)) . "\"/>" . PHP_EOL;
+        if (!empty($image_url) && !in_array($image_url, $addedImageUrls) && $imageCount < MAX_IMAGES) {
+            $xml .= "      <Image url=\"" . htmlspecialchars(trim($image_url)) . "\"/>" . PHP_EOL;
             $addedImageUrls[] = $image_url; // Добавляем URL-адрес в массив
+            $imageCount++;
+        }
+        if ($imageCount >= MAX_IMAGES) {
+            break; // Прерываем цикл, если достигнуто максимальное количество изображений
         }
     }
-    echo "    </Images>" . PHP_EOL;
+	
+    $xml .= "    </Images>" . PHP_EOL;
+	$brand = getBrandName($product->id);
+	$xml .= "    <Brand>" . htmlspecialchars($brand) . "</Brand>" . PHP_EOL;
+    $xml .= "    <Address>" . htmlspecialchars($fixedAddress) . "</Address>" . PHP_EOL;
+    $xml .= "    <Condition>" . htmlspecialchars($defaultCondition) . "</Condition>" . PHP_EOL;
+    $xml .= "    <AdType>" . htmlspecialchars($defaultAdType) . "</AdType>" . PHP_EOL;
+    $xml .= "    <ContactPhone>" . htmlspecialchars($contactPhone) . "</ContactPhone>" . PHP_EOL;
+    $xml .= "    <Availability>" . htmlspecialchars($availability) . "</Availability>" . PHP_EOL;
+    $xml .= "    <ContactMethod>" . htmlspecialchars($contactMethod) . "</ContactMethod>" . PHP_EOL;
+    $xml .= "    <GoodsType>" . htmlspecialchars($fixedGoodsType) . "</GoodsType>" . PHP_EOL;
+    $xml .= "    <GoodsSubType>" . htmlspecialchars($fixedGoodsSubType) . "</GoodsSubType>" . PHP_EOL;
+    $xml .= "    <Delivery>" . htmlspecialchars($delivery) . "</Delivery>" . PHP_EOL;
+    $xml .= "    <InternetCalls>" . htmlspecialchars($internetCalls) . "</InternetCalls>" . PHP_EOL;
 
-    echo "    <Address>" . htmlspecialchars($fixedAddress) . "</Address>" . PHP_EOL;
-    echo "    <LedLamp>" . htmlspecialchars($fixedLedLamp) . "</LedLamp>" . PHP_EOL;
 
-    // Получаем бренд (замените на ваш код)
-    $brand = getBrandName($product->id);
-    echo "    <Brand>" . htmlspecialchars($brand) . "</Brand>" . PHP_EOL;
+	
+	
+	
+	
+	
+	
 
-    echo "    <GoodsType>" . htmlspecialchars($fixedGoodsType) . "</GoodsType>" . PHP_EOL;
-    echo "    <GoodsSubType>" . htmlspecialchars($fixedGoodsSubType) . "</GoodsSubType>" . PHP_EOL;
-    echo "    <LightingType>" . htmlspecialchars($lightingType) . "</LightingType>" . PHP_EOL;
-    echo "    <ChandelierType>" . htmlspecialchars($chandelierType) . "</ChandelierType>" . PHP_EOL;
-    echo "    <ChandelierMountingType>" . htmlspecialchars($chandelierMountingType) . "</ChandelierMountingType>" . PHP_EOL;
-    echo "    <Delivery>" . htmlspecialchars($delivery) . "</Delivery>" . PHP_EOL;
-    echo "    <InternetCalls>" . htmlspecialchars($internetCalls) . "</InternetCalls>" . PHP_EOL;
-    echo "    <ContactMethod>" . htmlspecialchars($contactMethod) . "</ContactMethod>" . PHP_EOL;
-    echo "    <Condition>" . htmlspecialchars($defaultCondition) . "</Condition>" . PHP_EOL;
-    echo "    <AdType>" . htmlspecialchars($defaultAdType) . "</AdType>" . PHP_EOL;
-    echo "    <ContactPhone>" . htmlspecialchars($contactPhone) . "</ContactPhone>" . PHP_EOL;
-    echo "    <Availability>" . htmlspecialchars($availability) . "</Availability>" . PHP_EOL;
-    echo "  </Ad>" . PHP_EOL;
+    if ($product->id_aprel == 'san') {  // Настройки для сантехники
+
+        $xml .= generateXmlTag("producttype", $producttype);
+        $xml .= generateXmlTag("BathroomAccessoriestype", $bathroombccessoriestype);
+        $xml .= generateXmlTag("BathMaterial", $BathMaterial);
+        $xml .= generateXmlTag("BathShape", $BathShape);
+        $xml .= generateXmlTag("BathJacuzzi",  $BathJacuzzi);
+        $xml .= generateXmlTag("BathWidth", $BathWidth);
+        $xml .= generateXmlTag("BathLength", $BathLength);
+		
+    }  elseif ($product->id_aprel == 'svet') { // Настройки для освещения
+		
+        $xml .= "    <NumberOfLamps>" . htmlspecialchars($numberoflamps) . "</NumberOfLamps>" . PHP_EOL;
+		$xml .= "    <ChandelierMountingType>" . htmlspecialchars($chandeliermountingtype) . "</ChandelierMountingType>" . PHP_EOL;	
+		$xml .= "    <LedLamp>" . htmlspecialchars($ledlamp) . "</LedLamp>" . PHP_EOL;
+		$xml .= "    <ChandelierType>" . htmlspecialchars($chandeliertype) . "</ChandelierType>" . PHP_EOL;
+		$xml .= "    <LigitingType>" . htmlspecialchars($ligitingtype) . "</LigitingType>" . PHP_EOL;
+		$xml .= "    <Material>" . htmlspecialchars($material) . "</Material>" . PHP_EOL;		
+    }
+
+    $xml .= "  </Ad>" . PHP_EOL;
+
+    echo $xml;
 }
 
 echo "</Ads>" . PHP_EOL;
-?>
-<?php
-$xml = ob_get_clean(); // Получаем содержимое буфера и очищаем его
-header('Content-Disposition: attachment; filename="' . $filename . '"');
-header('Content-type: text/xml');
-echo $xml; // Выводим XML-код
-?>
