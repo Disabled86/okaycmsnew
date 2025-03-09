@@ -11,6 +11,15 @@ function logToFile(string $message): void
     error_log($logMessage, 3, LOG_FILE);
 }
 
+// Функция для обработки исключений PDO
+function handlePDOException(PDOException $e, string $sql, array $params): void
+{
+    logToFile("PDOException: " . $e->getMessage());
+    logToFile("SQL: " . $sql);
+    logToFile("Params: " . print_r($params, true));
+    die("Database error occurred. Check logs for details.");
+}
+
 // Настройки для Avito (общие)
 $defaultCondition = "Новое";
 $imagePrefix = "https://waterglow.ru/files/originals/products/";
@@ -47,7 +56,7 @@ function getFeedSettings(int $feed_id): array
         return $settings;
 
     } catch (PDOException $e) {
-        handlePDOException($e, "SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains FROM feed_settings WHERE feed_id = ?", [$feed_id]);
+        handlePDOException($e, "SELECT feed_name, selected_brands, include_no_image, include_out_of_stock, min_price, title_contains, exclude_words FROM feed_settings WHERE feed_id = ?", [$feed_id]);
         return [];
     }
 }
@@ -68,7 +77,6 @@ $includeOutOfStock = (bool) ($feedSettings['include_out_of_stock'] ?? false);
 $minPrice = (float) ($feedSettings['min_price'] ?? 0.00);
 $titleContains = $feedSettings['title_contains'] ?? '';
 $excludeWords = $feedSettings['exclude_words'] ?? '';
-
 
 // Преобразуем строку выбранных брендов в массив
 $selectedBrands = ($selectedBrandsString === 'all') ? 'all' : explode(',', $selectedBrandsString);
@@ -91,13 +99,21 @@ function getProductsFromDatabase(array $selectedBrands = [], bool $includeNoImag
             v.goodstype,
             v.`BathroomAccessoriestype`,
             v.`producttype`,
-			v.`BathMaterial`,
+            v.`BathMaterial`,
             v.`BathShape`,
             v.`BathJacuzzi`,
             v.`BathWidth`,
-            v.`chandeliermountingtype`,	
-            v.`chandeliertype`,				
-            v.`ligitingtype`,				
+            v.`chandeliermountingtype`,    
+            v.`chandeliertype`,                
+            v.`ligitingtype`,  
+            v.`installationfunction`,	
+            v.`installationkit`,	
+            v.`kit`,	
+            v.`toiletinstailationtype`,		
+
+
+
+			
 			
             v.`BathLength`
         FROM ok_products p
@@ -289,6 +305,54 @@ function generateXmlTag(string $tagName, string $value): string {
     return "";
 }
 
+// Функция для проверки наличия всех значений в товаре для каждой категории
+function validateProductTags($product): bool
+{
+    $requiredTags = [];
+
+    if ($product->id_aprel == 'san') {
+        $requiredTags = [
+            'name',
+            'description',
+            'main_image_id',
+            'category_av',
+            'goodssubtype',
+            'goodstype',
+            'producttype',
+            'BathroomAccessoriestype',
+            'BathMaterial',
+            'BathShape',
+            'BathJacuzzi',
+            'BathWidth',
+            'BathLength',
+            'installationkit',			
+            'installationfunction',
+            'kit',			
+            'toiletinstailationtype',				
+			
+			
+			
+			
+        ];
+    } elseif ($product->id_aprel == 'svet') {
+        $requiredTags = [
+            'name',
+            'description',
+            'main_image_id',
+            'category_av',
+            'goodssubtype',
+            'goodstype',
+            'chandeliermountingtype',
+            'chandeliertype',
+            'ligitingtype',
+        ];
+    }
+
+
+
+    return true;
+}
+
 // Получаем объекты товаров
 $products = getProductsFromDatabase($selectedBrands, $includeNoImage, $includeOutOfStock, $minPrice, $titleContains, $excludeWords);
 
@@ -304,6 +368,11 @@ echo "<Ads formatVersion=\"3\" target=\"Avito.ru\">" . PHP_EOL;
 
 // Генерируем XML
 foreach ($products as $product) {
+    // Проверяем наличие данных для всех тегов
+    if (!validateProductTags($product)) {
+        continue; // Пропускаем товар, если хотя бы один из тегов пустой
+    }
+
     $xml = ""; // Инициализируем переменную для хранения XML-кода товара
 
     // Получаем URL-адрес главной картинки
@@ -337,8 +406,16 @@ foreach ($products as $product) {
         $BathJacuzzi = isset($product->BathJacuzzi) ? htmlspecialchars($product->BathJacuzzi) : "";
         $BathWidth = isset($product->BathWidth) ? htmlspecialchars($product->BathWidth) : "";
         $BathLength = isset($product->BathLength) ? htmlspecialchars($product->BathLength) : "";
-		$producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";			
-
+        $installationfunction = isset($product->installationfunction) ? htmlspecialchars($product->installationfunction) : ""; 
+        $installationkit = isset($product->installationkit) ? htmlspecialchars($product->installationkit) : ""; 	
+        $kit = isset($product->kit) ? htmlspecialchars($product->kit) : ""; 		
+        $toiletinstailationtype = isset($product->toiletinstailationtype) ? htmlspecialchars($product->toiletinstailationtype) : ""; 		
+		
+		
+		
+		
+		
+		
 		
     } elseif ($product->id_aprel == 'svet') {
         $fixedCategory = "Мебель и интерьер";
@@ -348,13 +425,13 @@ foreach ($products as $product) {
         $internetCalls = "Да";
         $contactMethod = "По телефону и в сообщениях";
         $numberoflamps = "1";
-		$ledlamp = "Да";
-		$category_av = isset($product->category_av) ? htmlspecialchars($product->category_av) : "";
-		$chandeliermountingtype = isset($product->chandeliermountingtype) ? htmlspecialchars($product->chandeliermountingtype) : "";
-		$chandeliertype = isset($product->chandeliertype) ? htmlspecialchars($product->chandeliertype) : "";
-		$ligitingtype = isset($product->ligitingtype) ? htmlspecialchars($product->ligitingtype) : "";		
-		$producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";		
-	
+        $ledlamp = "Да";
+        $category_av = isset($product->category_av) ? htmlspecialchars($product->category_av) : "";
+        $chandeliermountingtype = isset($product->chandeliermountingtype) ? htmlspecialchars($product->chandeliermountingtype) : "";
+        $chandeliertype = isset($product->chandeliertype) ? htmlspecialchars($product->chandeliertype) : "";
+        $ligitingtype = isset($product->ligitingtype) ? htmlspecialchars($product->ligitingtype) : "";        
+        $producttype = isset($product->producttype) ? htmlspecialchars($product->producttype) : "";        
+    
     } else {
         // Значения по умолчанию для других id_aprel
         $fixedCategory = "Разное";
@@ -423,10 +500,10 @@ foreach ($products as $product) {
             break; // Прерываем цикл, если достигнуто максимальное количество изображений
         }
     }
-	
+    
     $xml .= "    </Images>" . PHP_EOL;
-	$brand = getBrandName($product->id);
-	$xml .= "    <Brand>" . htmlspecialchars($brand) . "</Brand>" . PHP_EOL;
+    $brand = getBrandName($product->id);
+    $xml .= "    <Brand>" . htmlspecialchars($brand) . "</Brand>" . PHP_EOL;
     $xml .= "    <Address>" . htmlspecialchars($fixedAddress) . "</Address>" . PHP_EOL;
     $xml .= "    <Condition>" . htmlspecialchars($defaultCondition) . "</Condition>" . PHP_EOL;
     $xml .= "    <AdType>" . htmlspecialchars($defaultAdType) . "</AdType>" . PHP_EOL;
@@ -438,32 +515,32 @@ foreach ($products as $product) {
     $xml .= "    <Delivery>" . htmlspecialchars($delivery) . "</Delivery>" . PHP_EOL;
     $xml .= "    <InternetCalls>" . htmlspecialchars($internetCalls) . "</InternetCalls>" . PHP_EOL;
 
-
-	
-	
-	
-	
-	
-	
-
     if ($product->id_aprel == 'san') {  // Настройки для сантехники
-
-        $xml .= generateXmlTag("producttype", $producttype);
+        $xml .= generateXmlTag("ProductType", $producttype);
         $xml .= generateXmlTag("BathroomAccessoriestype", $bathroombccessoriestype);
         $xml .= generateXmlTag("BathMaterial", $BathMaterial);
         $xml .= generateXmlTag("BathShape", $BathShape);
         $xml .= generateXmlTag("BathJacuzzi",  $BathJacuzzi);
         $xml .= generateXmlTag("BathWidth", $BathWidth);
         $xml .= generateXmlTag("BathLength", $BathLength);
+        $xml .= generateXmlTag("InstallationFunction", $installationfunction);		
+        $xml .= generateXmlTag("InstallationKit", $installationkit);			
+        $xml .= generateXmlTag("Kit", $kit);			
+        $xml .= generateXmlTag("ToiletInstallationType", $toiletinstailationtype);			
 		
+		
+		
+		
+		
+		
+        
     }  elseif ($product->id_aprel == 'svet') { // Настройки для освещения
-		
         $xml .= "    <NumberOfLamps>" . htmlspecialchars($numberoflamps) . "</NumberOfLamps>" . PHP_EOL;
-		$xml .= "    <ChandelierMountingType>" . htmlspecialchars($chandeliermountingtype) . "</ChandelierMountingType>" . PHP_EOL;	
-		$xml .= "    <LedLamp>" . htmlspecialchars($ledlamp) . "</LedLamp>" . PHP_EOL;
-		$xml .= "    <ChandelierType>" . htmlspecialchars($chandeliertype) . "</ChandelierType>" . PHP_EOL;
-		$xml .= "    <LigitingType>" . htmlspecialchars($ligitingtype) . "</LigitingType>" . PHP_EOL;
-		$xml .= "    <Material>" . htmlspecialchars($material) . "</Material>" . PHP_EOL;		
+        $xml .= "    <ChandelierMountingType>" . htmlspecialchars($chandeliermountingtype) . "</ChandelierMountingType>" . PHP_EOL;    
+        $xml .= "    <LedLamp>" . htmlspecialchars($ledlamp) . "</LedLamp>" . PHP_EOL;
+        $xml .= "    <ChandelierType>" . htmlspecialchars($chandeliertype) . "</ChandelierType>" . PHP_EOL;
+        $xml .= "    <LigitingType>" . htmlspecialchars($ligitingtype) . "</LigitingType>" . PHP_EOL;
+        $xml .= "    <Material>" . htmlspecialchars($material) . "</Material>" . PHP_EOL;        
     }
 
     $xml .= "  </Ad>" . PHP_EOL;
