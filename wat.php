@@ -2,13 +2,13 @@
 // Подключаем конфигурационный файл
 require_once 'config.php';
 
-// Определение пути к лог-файлу в папке со скриптом
-$logFile = __DIR__ . '/mysql.log';
+ Определение пути к лог-файлу в папке со скриптом
+ $logFile = __DIR__ . '/mysql.log';
 
-function logMessage($message) {
-    global $logFile;
-    file_put_contents($logFile, date('Y-m-d H:i:s') . " - " . $message . PHP_EOL, FILE_APPEND);
-}
+ function logMessage($message) {
+     global $logFile;
+     file_put_contents($logFile, date('Y-m-d H:i:s') . " - " . $message . PHP_EOL, FILE_APPEND);
+ }
 
 // Функция для подключения к базе данных
 function connectDB() {
